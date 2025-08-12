@@ -4,7 +4,7 @@ import tempfile
 import time
 import json
 import hashlib
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from functools import partial
 
 import torch
@@ -23,13 +23,13 @@ from flow_grpo.reward import multi_score
 from flow_grpo.stat_tracking import PerPromptStatTracker
 from flow_grpo.ema import EMAModuleWrapper
 from .datasets import DistributedKRepeatSampler
-from .utils import calculate_zero_std_ratio, unwrap_model, save_ckpt, create_generator, load_dataset_class
+from .utils import calculate_zero_std_ratio, unwrap_model, save_ckpt, create_generator, get_dataset_class_for_prompt_fn
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 logger = get_logger(__name__)
 
 
-class BaseTrainer(ABC):
+class BaseTrainer:
     """Base trainer class for all Flow-GRPO training algorithms."""
     
     def __init__(self, config):
@@ -56,11 +56,9 @@ class BaseTrainer(ABC):
         )
         
         self.accelerator = Accelerator(
-            log_with="wandb",
             mixed_precision=self.config.mixed_precision,
             project_config=config,
             gradient_accumulation_steps=self.config.train.gradient_accumulation_steps,
-            split_batches=self.config.train.split_batches,
         )
         
         if self.accelerator.is_main_process:
@@ -71,10 +69,10 @@ class BaseTrainer(ABC):
     def setup_logging(self):
         """Setup wandb logging."""
         if self.accelerator.is_main_process:
-            self.accelerator.init_trackers(
-                project_name=self.config.tracker_project_name,
-                config=dict(self.config),
-                init_kwargs={"wandb": {"name": self.config.run_name}},
+            wandb.init(
+                project="flow_grpo",
+                name=self.config.run_name,
+                config=dict(self.config)
             )
             
     @abstractmethod
@@ -97,10 +95,9 @@ class BaseTrainer(ABC):
         """Compute log probabilities. Must be implemented by subclasses."""
         pass
         
-    @abstractmethod
     def compute_loss(self, *args, **kwargs):
-        """Compute training loss. Must be implemented by subclasses."""
-        pass
+        """Compute training loss. Implemented by algorithm mixins."""
+        raise NotImplementedError("This should be implemented by algorithm mixins.")
         
     def setup_model(self):
         """Setup the complete model pipeline."""
@@ -117,18 +114,25 @@ class BaseTrainer(ABC):
     def setup_lora(self):
         """Setup LoRA configuration and adapters."""
         lora_config = LoraConfig(
-            r=self.config.lora.rank,
-            lora_alpha=self.config.lora.alpha,
+            r=32,
+            lora_alpha=64,
+            init_lora_weights="gaussian",
             target_modules=self.get_lora_target_modules(),
-            lora_dropout=self.config.lora.dropout,
         )
         
         transformer = getattr(self.pipeline, self.get_transformer_attr_name())
-        transformer = get_peft_model(transformer, lora_config)
+        
+        # Check if we should load from a pretrained LoRA checkpoint
+        if hasattr(self.config.train, 'lora_path') and self.config.train.lora_path:
+            transformer = PeftModel.from_pretrained(transformer, self.config.train.lora_path)
+            transformer.set_adapter("default")
+        else:
+            transformer = get_peft_model(transformer, lora_config)
+            
         setattr(self.pipeline, self.get_transformer_attr_name(), transformer)
         
-        # Load checkpoint if specified
-        if self.config.resume_from_checkpoint:
+        # Load checkpoint if specified (different from lora_path)
+        if hasattr(self.config, 'resume_from_checkpoint') and self.config.resume_from_checkpoint:
             self.load_checkpoint()
             
     @abstractmethod
@@ -181,32 +185,26 @@ class BaseTrainer(ABC):
         
     def setup_data_loader(self):
         """Setup the data loader."""
-        dataset_class = load_dataset_class(
-            self.config.sample.dataset, 
-            self.get_dataset_class_name()
-        )
-        dataset = dataset_class(self.config.sample.dataset)
+        # Get dataset class based on prompt function like original scripts
+        dataset_class = get_dataset_class_for_prompt_fn(self.config.prompt_fn)
+        dataset = dataset_class(self.config.dataset, 'train')  # Pass dataset path and split
         
         sampler = DistributedKRepeatSampler(
             dataset=dataset,
             batch_size=self.config.sample.train_batch_size,
-            k=self.config.sample.num_images_per_prompt,
+            k=getattr(self.config.sample, 'num_image_per_prompt', self.config.sample.num_images_per_prompt),
             num_replicas=self.accelerator.num_processes,
             rank=self.accelerator.process_index,
-            seed=self.config.sample.seed,
+            seed=getattr(self.config.sample, 'seed', 42),
         )
         
         self.dataloader = DataLoader(
             dataset,
-            batch_size=self.config.sample.train_batch_size,
-            sampler=sampler,
+            batch_sampler=sampler,  # Use batch_sampler instead of sampler + batch_size
+            num_workers=1,
             collate_fn=dataset.collate_fn,
-            drop_last=True,
         )
         
-    def get_dataset_class_name(self):
-        """Get dataset class name. Can be overridden by subclasses."""
-        return "TextPromptDataset"
         
     def prepare_for_training(self):
         """Prepare models and optimizer for distributed training."""
@@ -230,7 +228,7 @@ class BaseTrainer(ABC):
             
     def load_checkpoint(self):
         """Load checkpoint if specified."""
-        if not self.config.resume_from_checkpoint:
+        if not hasattr(self.config, 'resume_from_checkpoint') or not self.config.resume_from_checkpoint:
             return
             
         lora_state_dict = torch.load(self.config.resume_from_checkpoint, map_location="cpu")["model_state_dict"]
@@ -242,10 +240,12 @@ class BaseTrainer(ABC):
             
     def setup_stat_tracking(self):
         """Setup statistics tracking."""
-        self.stat_tracker = PerPromptStatTracker(
-            buffer_size=self.config.stat_tracking.buffer_size,
-            min_count=self.config.stat_tracking.min_count,
-        )
+        if getattr(self.config, 'per_prompt_stat_tracking', False):
+            self.stat_tracker = PerPromptStatTracker(
+                getattr(self.config.sample, 'global_std', 1.0)
+            )
+        else:
+            self.stat_tracker = None
         
     def train(self):
         """Main training loop."""
@@ -293,15 +293,13 @@ class BaseTrainer(ABC):
                 
             global_step += 1
             
-    @abstractmethod
     def sample_batch(self, reward_fn):
-        """Sample a batch of data. Must be implemented by subclasses."""
-        pass
+        """Sample a batch of data. Implemented by algorithm mixins."""
+        raise NotImplementedError("This should be implemented by algorithm mixins.")
         
-    @abstractmethod
     def training_step(self, info):
-        """Perform one training step. Must be implemented by subclasses."""
-        pass
+        """Perform one training step. Implemented by algorithm mixins."""
+        raise NotImplementedError("This should be implemented by algorithm mixins.")
         
     def eval(self):
         """Evaluation phase."""

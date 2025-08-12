@@ -15,9 +15,29 @@ class FluxKontextTrainer(FluxTrainer):
             self.config.pretrained.model, torch_dtype=torch.bfloat16
         )
         
-    def get_dataset_class_name(self):
-        """Use image dataset for Kontext model."""
-        return "GenevalPromptImageDataset"
+    def setup_data_loader(self):
+        """Setup data loader with image dataset for Kontext model."""
+        from .datasets import GenevalPromptImageDataset, DistributedKRepeatSampler
+        from torch.utils.data import DataLoader
+        
+        # Use GenevalPromptImageDataset for Kontext model
+        dataset = GenevalPromptImageDataset(self.config.dataset, 'train')
+        
+        sampler = DistributedKRepeatSampler(
+            dataset=dataset,
+            batch_size=self.config.sample.train_batch_size,
+            k=getattr(self.config.sample, 'num_image_per_prompt', self.config.sample.num_images_per_prompt),
+            num_replicas=self.accelerator.num_processes,
+            rank=self.accelerator.process_index,
+            seed=getattr(self.config.sample, 'seed', 42),
+        )
+        
+        self.dataloader = DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            num_workers=1,
+            collate_fn=dataset.collate_fn,
+        )
         
     def compute_text_embeddings(self, prompts, images=None):
         """Compute FLUX Kontext text embeddings with image support."""

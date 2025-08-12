@@ -8,27 +8,27 @@ from .flux_kontext_trainer import FluxKontextTrainer
 from .algorithms import GRPOMixin, DPOMixin, SFTMixin
 
 
-class SD3GRPOTrainer(SD3Trainer, GRPOMixin):
-    """SD3 trainer with GRPO algorithm."""
+class SD3GRPOTrainer(GRPOMixin, SD3Trainer):
+    """SD3 trainer with GRPO algorithm.""" 
     pass
 
 
-class SD3DPOTrainer(SD3Trainer, DPOMixin):
+class SD3DPOTrainer(DPOMixin, SD3Trainer):
     """SD3 trainer with DPO algorithm.""" 
     pass
 
 
-class SD3SFTTrainer(SD3Trainer, SFTMixin):
+class SD3SFTTrainer(SFTMixin, SD3Trainer):
     """SD3 trainer with SFT algorithm."""
     pass
 
 
-class FluxGRPOTrainer(FluxTrainer, GRPOMixin):
+class FluxGRPOTrainer(GRPOMixin, FluxTrainer):
     """FLUX trainer with GRPO algorithm."""
     pass
 
 
-class FluxKontextGRPOTrainer(FluxKontextTrainer, GRPOMixin):
+class FluxKontextGRPOTrainer(GRPOMixin, FluxKontextTrainer):
     """FLUX Kontext trainer with GRPO algorithm.""" 
     pass
 
@@ -68,7 +68,7 @@ class S1Mixin:
         return info
 
 
-class SD3S1GRPOTrainer(SD3Trainer, S1Mixin, GRPOMixin):
+class SD3S1GRPOTrainer(GRPOMixin, S1Mixin, SD3Trainer):
     """SD3 trainer with S1 variant and GRPO algorithm."""
     
     def setup_model(self):

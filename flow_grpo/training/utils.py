@@ -45,17 +45,14 @@ def create_generator(config, batch_size=1, num_images_per_prompt=None):
     return generator
 
 
-def load_dataset_class(dataset_path, dataset_class_name="TextPromptDataset"):
-    """Dynamically choose dataset class based on the dataset path and type needed."""
+def get_dataset_class_for_prompt_fn(prompt_fn):
+    """Get dataset class based on prompt function, matching original script logic."""
     from .datasets import TextPromptDataset, GenevalPromptDataset, GenevalPromptImageDataset
     
-    dataset_classes = {
-        "TextPromptDataset": TextPromptDataset,
-        "GenevalPromptDataset": GenevalPromptDataset, 
-        "GenevalPromptImageDataset": GenevalPromptImageDataset
-    }
-    
-    if dataset_class_name not in dataset_classes:
-        raise ValueError(f"Unknown dataset class: {dataset_class_name}")
-        
-    return dataset_classes[dataset_class_name]
+    if prompt_fn == "general_ocr":
+        return TextPromptDataset
+    elif prompt_fn == "geneval":
+        return GenevalPromptDataset
+    else:
+        # Default to TextPromptDataset for other prompt functions
+        return TextPromptDataset
