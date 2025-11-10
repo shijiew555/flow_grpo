@@ -1,0 +1,2 @@
+export PYTHONPATH="${PYTHONPATH}:/home/hao_lab/miniconda3/envs/flow_grpo/bin/python"
+accelerate launch --config_file scripts/accelerate_configs/multi_gpu.yaml --main_process_port 29503 scripts/train_wan2_1.py --config config/grpo.py:general_ocr_wan2_1

@@ -31,7 +31,7 @@ def general_ocr_wan2_1():
     config.dataset = os.path.join(os.getcwd(), "dataset/ocr")
 
     # config.pretrained.model = "hf_cache/Wan2.1-T2V-14B-Diffusers"
-    config.pretrained.model = "hf_cache/Wan2.1-T2V-1.3B-Diffusers"
+    config.pretrained.model = "./Wan2.1-T2V-1.3B"
     config.sample.num_steps = 20
     config.sample.eval_num_steps = 50
     config.sample.guidance_scale=4.5
